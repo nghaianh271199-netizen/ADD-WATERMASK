@@ -1,57 +1,76 @@
 import streamlit as st
-from moviepy.editor import VideoFileClip, ImageClip, TextClip, CompositeVideoClip
+from moviepy.editor import VideoFileClip, CompositeVideoClip, ImageClip
+from PIL import Image, ImageDraw, ImageFont
+import tempfile
 
-st.title("🏃‍♂️ Thêm Watermark (Ảnh hoặc Chữ) chạy khắp video")
+# Hàm thêm watermark dạng text
+def add_text_watermark(video_path, text, output_path):
+    clip = VideoFileClip(video_path)
 
-# Upload video
-video_file = st.file_uploader("Chọn video (MP4/MOV)", type=["mp4", "mov"])
+    # Lấy kích thước video
+    W, H = clip.size
 
-# Chọn loại watermark
-wm_type = st.radio("Chọn loại watermark", ["Ảnh (PNG)", "Text"])
+    # Tạo ảnh trong suốt bằng Pillow
+    txt_img = Image.new("RGBA", (W, H), (0,0,0,0))
+    draw = ImageDraw.Draw(txt_img)
 
-logo_file = None
-wm_text = ""
+    # Font chữ (Streamlit Cloud có sẵn DejaVuSans)
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 40)
+    except:
+        font = ImageFont.load_default()
 
-if wm_type == "Ảnh (PNG)":
-    logo_file = st.file_uploader("Chọn watermark (PNG)", type=["png"])
-elif wm_type == "Text":
-    wm_text = st.text_input("Nhập chữ watermark", "© Trung")
+    # Vẽ chữ ở góc phải dưới
+    text_w, text_h = draw.textsize(text, font=font)
+    draw.text((W-text_w-20, H-text_h-20), text, font=font, fill=(255,255,255,180))
 
-if video_file and (logo_file or wm_text):
-    if st.button("Tạo video"):
-        # Lưu video tạm
-        with open("temp_video.mp4", "wb") as f:
-            f.write(video_file.read())
+    # Convert sang ImageClip
+    txt_clip = ImageClip(txt_img).set_duration(clip.duration)
 
-        # Load video gốc
-        clip = VideoFileClip("temp_video.mp4")
+    # Overlay
+    final = CompositeVideoClip([clip, txt_clip])
+    final.write_videofile(output_path, codec="libx264", audio_codec="aac")
 
-        # Tạo watermark
-        if wm_type == "Ảnh (PNG)" and logo_file:
-            with open("temp_logo.png", "wb") as f:
-                f.write(logo_file.read())
-            wm = ImageClip("temp_logo.png").set_duration(clip.duration).resize(height=60)
-        else:
-            wm = TextClip(
-                wm_text,
-                fontsize=40,
-                color="white",
-                font="Arial-Bold"
-            ).set_duration(clip.duration)
+# Hàm thêm watermark dạng logo PNG
+def add_logo_watermark(video_path, logo_path, output_path):
+    clip = VideoFileClip(video_path)
+    logo = (ImageClip(logo_path)
+            .set_duration(clip.duration)
+            .resize(height=50)  # thu nhỏ logo
+            .margin(right=20, bottom=20, opacity=0)  # cách mép
+            .set_pos(("right","bottom")))
+    
+    final = CompositeVideoClip([clip, logo])
+    final.write_videofile(output_path, codec="libx264", audio_codec="aac")
 
-        # Hàm di chuyển watermark
-        def move_wm(t):
-            x = int((clip.w + wm.w) * (t / clip.duration)) % (clip.w + wm.w) - wm.w
-            y = clip.h - wm.h - 20
-            return (x, y)
+# ----------------- Streamlit UI -----------------
+st.title("💧 Thêm Watermark vào Video")
 
-        wm = wm.set_pos(move_wm)
+uploaded_video = st.file_uploader("📂 Tải lên video", type=["mp4","mov","avi"])
+watermark_type = st.radio("Chọn loại watermark:", ["Text","Logo"])
 
-        # Ghép watermark vào video
-        final = CompositeVideoClip([clip, wm])
-        output_file = "output.mp4"
-        final.write_videofile(output_file, codec="libx264")
+if uploaded_video:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_video:
+        tmp_video.write(uploaded_video.read())
+        video_path = tmp_video.name
 
-        # Cho tải file kết quả
-        with open(output_file, "rb") as f:
-            st.download_button("📥 Tải video có watermark", f, file_name="watermarked.mp4")
+    if watermark_type == "Text":
+        wm_text = st.text_input("✍️ Nhập watermark text:")
+        if st.button("Tạo video"):
+            output_path = "output.mp4"
+            add_text_watermark(video_path, wm_text, output_path)
+            st.video(output_path)
+            with open(output_path, "rb") as f:
+                st.download_button("⬇️ Tải video", f, "watermarked.mp4")
+    else:
+        wm_logo = st.file_uploader("📂 Tải lên logo PNG", type=["png"])
+        if wm_logo and st.button("Tạo video"):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_logo:
+                tmp_logo.write(wm_logo.read())
+                logo_path = tmp_logo.name
+
+            output_path = "output.mp4"
+            add_logo_watermark(video_path, logo_path, output_path)
+            st.video(output_path)
+            with open(output_path, "rb") as f:
+                st.download_button("⬇️ Tải video", f, "watermarked.mp4")
